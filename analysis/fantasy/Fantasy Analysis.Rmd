@@ -1,0 +1,398 @@
+---
+title: "Season-to-Date Analysis"
+author: "Samuel Ivanecky"
+date: "12/17/2021"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(ggimage)
+library(nflfastR)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+```
+
+# Run Data Load Scripts
+```{r}
+# Kick off scripts to load fantasy data
+source("/Users/samivanecky/git/nfl/analysis/fantasy/fpPtsvProjScrapeR.R")
+source("/Users/samivanecky/git/nfl/analysis/fantasy/getNFLData.R")
+
+# Load logos
+logos <- teams_colors_logos %>%
+  select(team_abbr, team_logo_espn)
+```
+
+# Data Manipulation
+```{r}
+# Add data for rolling three game average and season long average
+ffDf <- ff %>%
+  group_by(full_name, recent_team) %>%
+  arrange(week, .by_group = TRUE) %>%
+  mutate( 
+    var_as_pct = round(abs((Var / fantasy_points_ppr)) * 100, 2)
+  ) %>%
+  mutate(
+    c_avg_ppr_pts = round(cummean(fantasy_points_ppr), 2),
+    c_var_ppr_pts = round(cummean(Var), 2),
+    c_var_abs_ppr_pts = round(cummean(abs(Var)), 2),
+    c_var_pct = round(cummean(var_as_pct), 2),
+    ppr_pts_3wk_avg = round(zoo::rollmean(fantasy_points_ppr, k = 3, fill = NA, align = "right"), 2),
+    ppr_pts_3wk_var = round(zoo::rollmean(Var, k = 3, fill = NA, align = "right"), 2),
+    abs_var_3wk = round(zoo::rollmean(abs(Var), k = 3, fill = NA, align = "right"), 2),
+    var_pct_3wk = round(zoo::rollmean(var_as_pct, k = 3, fill = NA, align = "right"), 2)
+  ) %>%
+  mutate(
+    Var_v_Szn_Avg = Var - lag(c_var_ppr_pts),
+    PPR_v_Szn_Avg = fantasy_points_ppr - lag(c_avg_ppr_pts),
+    Var_v_3wk_Avg = Var - lag(ppr_pts_3wk_var),
+    PPR_v_3wk_Avg = fantasy_points_ppr - lag(ppr_pts_3wk_avg),
+    PPR_3wk_v_Szn = ppr_pts_3wk_avg - lag(c_avg_ppr_pts, 3),
+    Var_3wk_v_Szn = ppr_pts_3wk_var - lag(c_var_ppr_pts, 3),
+    Abs_Var_3wk_v_Szn = abs_var_3wk - lag(c_var_abs_ppr_pts, 3),
+    Var_3wk_Pct_v_Szn = var_pct_3wk - lag(c_var_pct, 3)
+  ) %>%
+  mutate(
+    `PPR 3/wk Avg.` = case_when(
+      ppr_pts_3wk_avg < 5 ~ "< 5",
+      ppr_pts_3wk_avg >= 5 & ppr_pts_3wk_avg <= 10 ~ "5-10",
+      ppr_pts_3wk_avg > 10 & ppr_pts_3wk_avg <= 17 ~ "11-17",
+      T ~ "18+"
+    ),
+    `Variance 3/wk Avg. (%)` = case_when(
+      var_pct_3wk <= 25 ~ "Stable",
+      var_pct_3wk > 25 & var_pct_3wk <= 50 ~ "Moderately Volatile",
+      var_pct_3wk > 50 ~ "Very Volatile",
+      T ~ "Other"
+    ),
+    `Player Trend` = case_when(
+      abs(lag(PPR_3wk_v_Szn)) <= 3 ~ "Neutral",
+      lag(PPR_3wk_v_Szn) < -3 ~ "Negative",
+      lag(PPR_3wk_v_Szn) > 3 ~ "Positive",
+      T ~ "Not Enough Games"
+    )
+  ) %>%
+  mutate(
+    `Player Trend` = as.factor(`Player Trend`)
+  )
+```
+
+# Visuals
+## Points Over Projection Graphs
+```{r}
+ffDf %>%
+  filter(full_name != "AJ Dillon") %>%
+  filter(week == 15 & position == "QB" & !is.na(fantasy_points_ppr) & Var > 0 & fantasy_points_ppr >= 18) %>%
+  ggplot(aes(reorder(full_name, Var), Var, fill = `Player Trend`)) +
+  geom_bar(stat = "identity") +
+  geom_label(aes(label = fantasy_points_ppr), nudge_y = -0.1, size = 8, colour = "black", fill = "white") +
+  ggplot2::labs(
+    x = "Player",
+    y = "PPR Performance vs Projection",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football QBs in Week 15",
+    subtitle = "Data does not include Week 15's Tuesday games. Labels show actual PPR points for the week. Min of 18 points."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=30, face = "bold"),
+  ) +
+  coord_flip() +
+  scale_fill_brewer(palette="Set1")
+```
+
+## Table Points Over Projection
+```{r}
+top10 <- ffDf %>%
+  ungroup() %>%
+  filter(week == 15) %>%
+  slice_max(n = 10, order_by = Var) %>%
+  select(
+    full_name, fantasy_points_ppr, Proj.Pts, Var
+  ) %>%
+  rename(
+    Name = full_name,
+    `PPR Points - Scored` = fantasy_points_ppr,
+    `PPR Points - Expected` = Proj.Pts,
+    `Points Over Projection` = Var
+  )
+
+DT::datatable(top10)
+
+bot10 <- ffDf %>%
+  ungroup() %>%
+  filter(week == 15) %>%
+  slice_min(n = 10, order_by = Var) %>%
+  select(
+    full_name, fantasy_points_ppr, Proj.Pts, Var
+  ) %>%
+  rename(
+    Name = full_name,
+    `PPR Points - Scored` = fantasy_points_ppr,
+    `PPR Points - Expected` = Proj.Pts,
+    `Points Over Projection` = Var
+  )
+
+DT::datatable(bot10)
+
+```
+
+# Receiving FP by Throws
+## Subset PBP Data
+```{r}
+pass <- pbp %>%
+  filter(!is.na(posteam) & play_type == "pass" & !is.na(receiver_player_id) & complete_pass == 1) %>%
+  select(
+    game_id, game_date, posteam, week, passer_player_id, passer_player_name, receiver_player_id, receiver_player_name, air_yards, yards_after_catch, yards_gained,
+    touchdown, game_seconds_remaining
+  ) %>%
+  mutate(
+    ppr_pts = 1 + (0.1 * yards_gained) + (6 * touchdown)
+  )
+
+# Data validation
+passGames <- pass %>%
+  group_by(
+    receiver_player_id, receiver_player_name, week
+  ) %>%
+  summarise(
+    total_ppr_pts = sum(ppr_pts)
+  )
+
+# Join data for validation
+tempDf <- ff %>%
+  filter(position %in% c("WR")) %>%
+  select(
+    player_name, player_id, week, fantasy_points_ppr
+  )
+
+passGames <- passGames %>%
+  inner_join(tempDf, by = c("receiver_player_id" = "player_id", "week")) %>%
+  mutate(
+    pt_diff = round(fantasy_points_ppr - total_ppr_pts, 2)
+  )
+
+# Validate
+sum((passGames$pt_diff == 0), na.rm = T) / nrow(passGames)
+```
+
+## Break Up Data into Pass Lengths
+```{r}
+pass <- pass %>%
+  mutate(
+    pass_length = case_when(
+      air_yards <= 5 ~ "short",
+      air_yards > 5 & air_yards <= 15 ~ "medium",
+      air_yards > 15 ~ "long",
+      T ~ "other"
+    )
+  ) 
+
+# Group data
+passGrp <- pass %>%
+  group_by(
+    receiver_player_id, receiver_player_name, pass_length
+  ) %>%
+  summarise(
+    ppr_pts = sum(ppr_pts, na.rm = T)
+  )
+
+# Subset FF data
+plyrData <- ff %>%
+  filter(position == "WR") %>%
+  select(
+    player_id, full_name, recent_team, fantasy_points_ppr
+  ) %>%
+  funique() %>%
+  group_by(
+    player_id, full_name, recent_team
+  ) %>%
+  summarise(
+    ppr = sum(fantasy_points_ppr, na.rm = T)
+  ) %>%
+  ungroup() %>%
+  filter(!(full_name %in% c("Ced Wilson", "DJ Moore", "AJ Dillon", "Jamycal Hasty"))) %>%
+  group_by(recent_team) %>%
+  arrange(desc(ppr), .by_group = T) %>%
+  mutate(
+    team_rank = 1:n()
+  ) %>%
+  filter(team_rank <= 4)
+
+# Join
+passGrp <- passGrp %>%
+  inner_join(plyrData, by = c("receiver_player_id" = "player_id"))
+```
+
+## Visualize Passing Points
+```{r}
+passGrp %>%
+  filter(pass_length != "other") %>%
+  ggplot(aes(reorder(full_name, team_rank), ppr_pts)) +
+  geom_col(aes(color = recent_team, fill = recent_team, alpha = pass_length)) +
+  # geom_label(aes(label = full_name), nudge_y = -0.1, size = 8, colour = "black", fill = "white") +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football WRs PPR Points by Pass Type",
+    subtitle = "Showing top 4 WRs per team. Short: < 5 air yds. Medium: 6-15 air yds. Long: > 15 air yds."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  guides(alpha=guide_legend(title="Pass Length")) +
+  coord_flip() +
+  facet_wrap(recent_team ~ ., scales = "free_y")
+```
+
+# Running Back Points by Run Length
+## Aggregate Data
+```{r}
+run <- pbp %>%
+  filter(!is.na(posteam) & play_type == "run" & !is.na(rusher_player_id)) %>%
+  select(
+    game_id, game_date, posteam, week, rusher_player_id, rusher_player_name, yards_gained, touchdown, game_seconds_remaining
+  ) %>%
+  mutate(
+    ppr_pts = (0.1 * yards_gained) + (6 * touchdown)
+  )
+
+# Data validation
+runGames <- run %>%
+  group_by(
+    rusher_player_id, rusher_player_name, week
+  ) %>%
+  summarise(
+    total_ppr_pts = sum(ppr_pts)
+  )
+
+# Join data for validation
+tempDf <- ff %>%
+  filter(position %in% c("RB")) %>%
+  select(
+    player_name, player_id, week, fantasy_points_ppr
+  )
+
+runGames <- runGames %>%
+  inner_join(tempDf, by = c("rusher_player_id" = "player_id", "week")) %>%
+  mutate(
+    pt_diff = round(fantasy_points_ppr - total_ppr_pts, 2)
+  )
+
+# Validate
+sum((runGames$pt_diff == 0), na.rm = T) / nrow(passGames)
+```
+
+## Break Up Data into Rush Lengths
+```{r}
+run <- run %>%
+  mutate(
+    rush_length = case_when(
+      yards_gained <= 5 ~ "short",
+      yards_gained > 5 & yards_gained <= 10 ~ "medium",
+      yards_gained > 10 ~ "long",
+      T ~ "other"
+    )
+  ) 
+
+# Group data
+runGrp <- run %>%
+  group_by(
+    rusher_player_id, rusher_player_name, rush_length
+  ) %>%
+  summarise(
+    ppr_pts = sum(ppr_pts, na.rm = T)
+  )
+
+# Subset FF data
+plyrData <- ff %>%
+  filter(position == "RB") %>%
+  select(
+    player_id, full_name, recent_team, fantasy_points_ppr
+  ) %>%
+  funique() %>%
+  group_by(
+    player_id, full_name, recent_team
+  ) %>%
+  summarise(
+    ppr = sum(fantasy_points_ppr, na.rm = T)
+  ) %>%
+  ungroup() %>%
+  filter(!(full_name %in% c("Ced Wilson", "DJ Moore", "AJ Dillon"))) %>%
+  group_by(recent_team) %>%
+  arrange(desc(ppr), .by_group = T) %>%
+  mutate(
+    team_rank = 1:n()
+  ) %>%
+  filter(team_rank <= 3)
+
+# Join
+runGrp <- runGrp %>%
+  inner_join(plyrData, by = c("rusher_player_id" = "player_id"))
+```
+
+## Visualize Rushing Points
+```{r}
+runGrp %>%
+  filter(rush_length != "other") %>%
+  ggplot(aes(reorder(full_name, ppr_pts), ppr_pts)) +
+  geom_col(aes(color = recent_team, fill = recent_team, alpha = rush_length)) +
+  # geom_label(aes(label = full_name), nudge_y = -0.1, size = 8, colour = "black", fill = "white") +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football RBs Points by Rush Length",
+    subtitle = "Showing top 3 RBs per team. Short: < 5 yds. Medium: 6-10 yds. Long: > 10 yds. Data through Week 15."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  guides(alpha=guide_legend(title="Rush Length")) +
+  coord_flip() +
+  facet_wrap(recent_team ~ ., scales = "free_y")
+```
+
+
+
+
+
