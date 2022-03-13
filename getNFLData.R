@@ -32,6 +32,9 @@ ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
 # Get play-by-play
 pbp <- nflfastR::build_nflfastR_pbp(ids)
 
+# Load fantasy expectations
+ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2010:2021))
+
 # Combine roster with stats
 # Subset roster data to join
 roster_sub <- roster %>%
@@ -47,30 +50,30 @@ stats <- stats %>%
 off <- stats %>%
   filter(position %in% c("QB", "RB", "WR", "TE"))
 
-# Create subset
+# Create subset with more recent years
 ff <- off %>%
-  filter(season_type == 'REG' & season == 2021) %>%
+  filter(season_type == 'REG' & season >= 2010) %>%
   select(player_name, full_name, player_id, position, recent_team, season, week, fantasy_points, fantasy_points_ppr) %>%
   unique()
 
 # Modify some names
-plyrDf <- plyrDf %>%
-  mutate(
-    Name = case_when(
-      Name == "AJ Dillon" ~ "A.J. Dillon",
-      Name == "D.J. Moore" ~ "DJ Moore",
-      Name == "D.K. Metcalf" ~ "DK Metcalf",
-      Name == "Amon-Ra. St." ~ "Amon-Ra. St. Brown",
-      Name == "Equanimeous St." ~ "Equanimeous St. Brown",
-      Name == "Cedrick Wilson" ~ "Ced Wilson",
-      Name == "Joshua Palmer" ~ "Josh Palmer",
-      T ~ Name
-    )
-  )
+# plyrDf <- plyrDf %>%
+#   mutate(
+#     Name = case_when(
+#       Name == "AJ Dillon" ~ "A.J. Dillon",
+#       Name == "D.J. Moore" ~ "DJ Moore",
+#       Name == "D.K. Metcalf" ~ "DK Metcalf",
+#       Name == "Amon-Ra. St." ~ "Amon-Ra. St. Brown",
+#       Name == "Equanimeous St." ~ "Equanimeous St. Brown",
+#       Name == "Cedrick Wilson" ~ "Ced Wilson",
+#       Name == "Joshua Palmer" ~ "Josh Palmer",
+#       T ~ Name
+#     )
+#   )
 
 # Join expectation data
-ff <- ff %>%
-  left_join(plyrDf, by = c("full_name" = "Name", "week" = "Week"))
+# ff <- ff %>%
+#   left_join(plyrDf, by = c("full_name" = "Name", "week" = "Week"))
 
 ff <- ff %>%
   group_by(player_id, player_name, position, season) %>%
@@ -110,3 +113,29 @@ ff_agg <- ff %>%
     wks_undr = n_distinct(week[Exceeded == "No"])
   ) %>%
   filter(!is.na(avg_var))
+
+#####################
+# Clean up data for fantasy expectations
+ff_exp_agg <- ff_exp %>%
+  group_by(season, posteam, player_id, full_name, position) %>%
+  summarise(
+    n_games = n_distinct(week),
+    avg_pts = round(mean(total_fantasy_points, na.rm = T), 3),
+    avg_pts_diff = round(mean(total_fantasy_points_diff, na.rm = T), 3),
+    avg_pts_exp = round(mean(total_fantasy_points_exp, na.rm = T), 3),
+    sd_pts = round(sd(total_fantasy_points, na.rm = T), 3),
+    sd_pts_diff = round(sd(total_fantasy_points_diff, na.rm = T), 3),
+    sd_pts_exp = round(sd(total_fantasy_points_exp, na.rm = T), 3)
+  ) %>%
+  ungroup() %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = T) %>%
+  mutate(
+    year_in_league = 1:n(),
+    avg_pts_shift = avg_pts - lag(avg_pts),
+    avg_pts_diff_shift = avg_pts_diff - lag(avg_pts_diff),
+    avg_pts_exp_shift = avg_pts_exp - lag(avg_pts_exp),
+    sd_pts_shift = sd_pts - lag(sd_pts),
+    sd_pts_diff_shift = sd_pts_diff - lag(sd_pts_diff),
+    sd_pts_exp_shift = sd_pts_exp - lag(sd_pts_exp)
+  )

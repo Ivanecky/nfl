@@ -1,0 +1,221 @@
+---
+title: "NFL Analysis"
+author: "Samuel Ivanecky"
+date: "1/30/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(ggimage)
+library(nflfastR)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(nflplotR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+```
+
+# Load Data
+```{r}
+# Play by play
+pbp <- nflfastR::load_pbp(2000:2021, qs = TRUE)
+
+# Weekly stats
+wkly <- nflfastR::load_player_stats(2000:2021, qs = TRUE)
+
+# Roster data
+rstr <- nflfastR::fast_scraper_roster(seasons = c(2000:2021))
+
+# Next Gen Stats
+ngs_pass <- nflreadr::load_nextgen_stats(seasons = TRUE, stat_type = "passing")
+ngs_rec <- nflreadr::load_nextgen_stats(seasons = TRUE, stat_type = "receiving")
+ngs_run <- nflreadr::load_nextgen_stats(seasons = TRUE, stat_type = "rushing")
+
+# Load schedule and 
+sched <- nflreadr::load_schedules(seasons = c(2000:2021))
+snaps <- nflreadr::load_snap_counts(seasons = c(2013:2021))
+```
+
+# Combine Data
+## Join Roster w Weekly Stats
+```{r}
+# Subset roster
+rstr_sub <- rstr %>%
+  select(gsis_id, position)
+
+stats <- wkly %>%
+  left_join(rstr_sub, by = c("player_id" = "gsis_id")) %>%
+  funique()
+```
+
+# Chargers Analysis
+## Pass v Run on 1/2 Downs
+### Subset Data
+```{r}
+lac <- pbp %>%
+  filter(season == 2021 & posteam == "LAC")
+
+# Group to get drive data
+lac_drives <- lac %>%
+  filter(down == 1) %>%
+  group_by(game_id, drive, score_differential) %>%
+  summarise(
+    pass_plays = sum(pass),
+    run_plays = sum(rush),
+    yds_on_pass = sum(yards_gained[play_type == "pass"]),
+    yds_on_run = sum(yards_gained[play_type == "run"]),
+    pass_wpa = sum(wpa[play_type == "pass"]),
+    run_wpa = sum(wpa[play_type == "run"]),
+    pass_epa = sum(epa[play_type == "pass"]),
+    run_epa = sum(epa[play_type == "run"]),
+    total_plays = n_distinct(play_id),
+    drive_result = first(fixed_drive_result)
+  ) %>%
+  mutate(
+    stance = case_when(
+      score_differential > 0 ~ 'winning',
+      score_differential == 0 ~ 'tied',
+      T ~ 'losing'
+    ),
+    pass_to_total = round(pass_plays / total_plays, 2),
+    run_to_total = round(run_plays / total_plays, 2)
+  ) %>%
+  mutate(
+    pass_cat = case_when(
+      pass_to_total > 0.5 ~ "pass",
+      pass_to_total < 0.5 ~ "run",
+      T ~ "neutral"
+    )
+  ) %>%
+  ungroup()
+```
+
+### Break Up Data
+```{r}
+# Group based on pass v run
+lac_grped <- lac_drives %>%
+  mutate(
+    drive_cat = case_when(
+      drive_result == "Touchdown" ~ "Points",
+      drive_result == "Field goal" ~ "Points",
+      T ~ "No Points"
+    )
+  ) %>%
+  group_by(pass_cat, drive_cat) %>%
+  summarise(
+    n = n()
+  ) %>%
+  ungroup() %>%
+  spread(drive_cat, n, fill = 0) %>%
+  mutate(
+    `Total` = `Points` + `No Points`
+  ) %>%
+  mutate(
+    Pts_Pct = round((Points / Total) * 100, 2),
+    NP_Pct = round((`No Points` / Total) * 100, 2),
+  )
+```
+
+## Air Yds on 1st Down
+### Subset Data
+```{r}
+# Group to get drive data
+lac_air_yds <- lac %>%
+  filter(down == 1) %>%
+  filter(pass == 1) %>%
+  group_by(game_id, drive, score_differential) %>%
+  summarise(
+    short_pass = n_distinct(play_id[air_yards <= 5]),
+    med_pass = n_distinct(play_id[air_yards > 5 & air_yards <= 10]),
+    long_pass = n_distinct(play_id[air_yards > 10]),
+    total_plays = n_distinct(play_id),
+    drive_result = first(fixed_drive_result)
+  ) %>%
+  mutate(
+    stance = case_when(
+      score_differential > 0 ~ 'winning',
+      score_differential == 0 ~ 'tied',
+      T ~ 'losing'
+    ),
+    short_ratio = round((short_pass / total_plays) * 100, 3),
+    med_ratio = round((med_pass / total_plays) * 100, 3),
+    long_ratio = round((long_pass / total_plays) * 100, 3)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    pass_cat = case_when(
+      short_ratio == med_ratio & med_ratio == long_ratio ~ "even",
+      short_ratio > med_ratio & short_ratio > long_ratio ~ "short",
+      short_ratio <= med_ratio & med_ratio > long_ratio ~ "medium",
+      long_ratio >= short_ratio & long_ratio >= med_ratio ~ "long",
+      T ~ "other"
+    )
+  )
+
+lac_air_grp <- lac_air_yds %>%
+  mutate(
+    drive_cat = case_when(
+      drive_result == "Touchdown" ~ "Points",
+      drive_result == "Field goal" ~ "Points",
+      T ~ "No Points"
+    )
+  ) %>%
+  group_by(drive_cat, stance, pass_cat) %>%
+  summarise(
+    n = n()
+  ) %>%
+  ungroup() %>%
+  spread(drive_cat, n, fill = 0) %>%
+  mutate(
+    `Total` = `Points` + `No Points`
+  ) %>%
+  mutate(
+    Pts_Pct = round((Points / Total) * 100, 2),
+    NP_Pct = round((`No Points` / Total) * 100, 2),
+  )
+
+lac_air_grp %>%
+  ggplot(aes(pass_cat, Pts_Pct, fill = pass_cat)) +
+  geom_col() +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football WRs Avg. PPR Points per Game by Season Halves",
+    subtitle = "Showing top 4 WRs per team. Season segments are broken into four: H1 is Weeks 1-8, H2 is Weeks 9-16. Only showing PPR points for receptions."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 20, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=10, face = "bold")
+  ) +
+  guides(alpha=guide_legend(title="Season Segment")) +
+  coord_flip() +
+  facet_wrap(stance ~ .)
+```
+
+# 2021 EPA by Quarter
+## Aggregate Data
+```{r}
+# Group data to team, quarter level
+teams <- pbp %>%
+  filter(season == 2021 & )
+```

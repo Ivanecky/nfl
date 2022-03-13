@@ -1,0 +1,379 @@
+---
+title: "Fantasy Consistency Analysis"
+author: "Samuel Ivanecky"
+date: "3/10/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(ggimage)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+
+# Load data
+# Load player IDs
+ff_ids <- nflreadr::load_ff_playerids() %>%
+  select(
+    gsis_id, draft_year, draft_round, draft_pick, college
+  ) %>%
+  filter(!is.na(gsis_id)) %>%
+  funique()
+
+# Load fantasy expectations
+ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2006:2021))
+
+# Join draft data to fantasy data
+ff_exp <- ff_exp %>%
+  left_join(ff_ids, by = c("player_id" = "gsis_id")) %>%
+  funique()
+
+# Clean up data for fantasy expectations
+ff_exp_agg <- ff_exp %>%
+  group_by(season, posteam, player_id, full_name, position) %>%
+  summarise(
+    n_games = n_distinct(week),
+    avg_pts = round(mean(total_fantasy_points, na.rm = T), 3),
+    avg_pts_diff = round(mean(total_fantasy_points_diff, na.rm = T), 3),
+    avg_pts_exp = round(mean(total_fantasy_points_exp, na.rm = T), 3),
+    sd_pts = round(sd(total_fantasy_points, na.rm = T), 3),
+    sd_pts_diff = round(sd(total_fantasy_points_diff, na.rm = T), 3),
+    sd_pts_exp = round(sd(total_fantasy_points_exp, na.rm = T), 3),
+    drft_yr = first(draft_year),
+    drft_round = first(draft_round),
+    drft_pick = first(draft_pick)
+  ) %>%
+  ungroup() %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = T) %>%
+  mutate(
+    year_in_league = as.numeric(season) - as.numeric(drft_yr) + 1,
+    avg_pts_shift = avg_pts - lag(avg_pts),
+    avg_pts_diff_shift = avg_pts_diff - lag(avg_pts_diff),
+    avg_pts_exp_shift = avg_pts_exp - lag(avg_pts_exp),
+    sd_pts_shift = sd_pts - lag(sd_pts),
+    sd_pts_diff_shift = sd_pts_diff - lag(sd_pts_diff),
+    sd_pts_exp_shift = sd_pts_exp - lag(sd_pts_exp),
+    prev_season_games = lag(n_games)
+  )
+
+```
+
+# Analysis
+## Year 2 RBs
+### Subset Data
+```{r}
+yr2rb <- ff_exp_agg %>%
+  filter(position == "RB" & year_in_league == 2 & prev_season_games > 5 & n_games > 5)
+```
+
+### Plot Overall Distribution
+```{r}
+yr2rb %>%
+  ggplot(aes(avg_pts_shift)) +
+  geom_histogram(fill = "lightgrey", color = "blue", binwidth = 1) +
+  ggplot2::labs(
+    x = "Avg. Points Shift from Year 1 to Year 2",
+    y = "Count",
+    caption = "Data: @nflfastR",
+    title = "RB Fantasy Points Average Change from Year 1 to Year 2",
+    subtitle = "Players required to have minimum of 5 games in both seasons to qualify."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+### Plot Individual Marks
+```{r}
+yr2rb %>%
+  ggplot(aes(avg_pts, avg_pts_shift, color = posteam)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 3, colour = "black", fill = "white", max.overlaps = 5) +
+  ggplot2::labs(
+    x = "Avg. Fantasy Points in Year 2",
+    y = "Avg. Point Shift vs Year 1",
+    caption = "Data: @nflfastR",
+    title = "RB Fantasy Jumps from Year 1 to Year 2",
+    subtitle = "Players from 2006 to 2021. RBs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+### Year 1 v Year 2
+```{r}
+yr2rb %>%
+  ggplot(aes((avg_pts - avg_pts_shift), avg_pts, color = posteam, size = 0.5)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 3, colour = "black", fill = "white", max.overlaps = 5) +
+  ggplot2::labs(
+    x = "Avg. Fantasy Points in Year 1",
+    y = "Avg. Fantasy Points in Year 2",
+    caption = "Data: @nflfastR",
+    title = "RB Fantasy Averages in Year 1 vs Year 2",
+    subtitle = "Players from 2006 to 2021. RBs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+## Year 2 WRs
+### Subset Data
+```{r}
+yr2wr <- ff_exp_agg %>%
+  filter(position == "WR" & year_in_league == 2 & prev_season_games > 5 & n_games > 5)
+```
+
+### Year 1 v Year 2
+```{r}
+yr2wr %>%
+  ggplot(aes((avg_pts - avg_pts_shift), avg_pts, color = posteam, size = 0.5)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 3, colour = "black", fill = "white", max.overlaps = 5) +
+  ggplot2::labs(
+    x = "Avg. Fantasy Points in Year 1",
+    y = "Avg. Fantasy Points in Year 2",
+    caption = "Data: @nflfastR",
+    title = "WR Fantasy Averages in Year 1 vs Year 2",
+    subtitle = "Players from 2006 to 2021. WRs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+### Yr 1 v Yr 2 Exp
+```{r}
+yr2wr %>%
+  ggplot(aes((avg_pts - avg_pts_shift), avg_pts, color = posteam, size = 0.5)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 3, colour = "black", fill = "white", max.overlaps = 5) +
+  ggplot2::labs(
+    x = "Avg. Fantasy Points in Year 1",
+    y = "Avg. Fantasy Points in Year 2",
+    caption = "Data: @nflfastR",
+    title = "WR Fantasy Averages in Year 1 vs Year 2",
+    subtitle = "Players from 2006 to 2021. WRs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+### Classify WRs
+```{r}
+yr2wr <- yr2wr %>%
+  mutate(
+    shift_cat = case_when(
+      avg_pts_shift < 1.5 & avg_pts_shift > -1.5 ~ 'maintained',
+      avg_pts_shift >= 1.5 & avg_pts_shift < 4 ~ 'modest improvement',
+      avg_pts_shift >= 4 ~ 'substantial improvement',
+      avg_pts_shift <= -1.5 & avg_pts_shift > -4 ~ 'modest regression',
+      T ~ 'substantial regression'
+    )
+  )
+```
+
+#### Plot Counts by Category
+```{r}
+yr2wr %>%
+  ggplot(aes(shift_cat, fill = shift_cat)) +
+  geom_bar(stat = "count") +
+  ggplot2::labs(
+    x = "Shift Category",
+    y = "Count",
+    caption = "Data: @nflfastR",
+    title = "WR Performances by Category",
+    subtitle = "Players from 2006 to 2021. WRs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+
+#### Scatter w Cats
+```{r}
+yr2wr %>%
+  ggplot(aes((avg_pts - avg_pts_shift), avg_pts, color = shift_cat)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 3, colour = "black", fill = "white", max.overlaps = 5) +
+  ggplot2::labs(
+    x = "Avg. Fantasy Points in Year 1",
+    y = "Avg. Fantasy Points in Year 2",
+    caption = "Data: @nflfastR",
+    title = "WR Fantasy Averages in Year 1 vs Year 2",
+    subtitle = "Players from 2006 to 2021. WRs required to have at least 5 games played in both seasons."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold"),
+  )
+```
+## WR Modeling Attempt
+### Get WR Data from Year 1
+```{r}
+# Subset year 1 data
+yr1wr <- ff_exp_agg %>%
+  ungroup() %>%
+  filter(year_in_league == 1 & position == "WR" & full_name %in% yr2wr$full_name) %>%
+  select(-c(year_in_league, avg_pts_shift, avg_pts_diff_shift, avg_pts_exp_shift, sd_pts_diff_shift, sd_pts_exp_shift, sd_pts_diff_shift,
+            prev_season_games, sd_pts_shift, drft_yr, position)) 
+
+# Subset cats
+wr_cats <- yr2wr %>%
+  select(full_name, player_id, shift_cat)
+
+# Join data
+yr1wr <- yr1wr %>%
+  left_join(wr_cats, by = c("full_name", "player_id"))
+```
+
+#### Visualize Counts by Draft Round
+```{r}
+yr1wr %>%
+  filter(!is.na(shift_cat)) %>%
+  ggplot(aes(drft_round, fill = shift_cat)) +
+  geom_bar(stat = "count", position = "dodge") +
+  ggplot2::labs(
+    x = "Round Drafted",
+    y = "Counts",
+    fill = "Category",
+    caption = "Data: @nflfastR",
+    title = "Fantasy Point Shift for WRs Between Rookie & Sophomore Seasons",
+    subtitle = "Shifts based on average points per game in year 1 vs year 2. Minimum 5 games played in each season. Data from 2006-2021."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 25, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=12, face = "bold")
+  ) +
+  scale_fill_brewer(palette="Set1") +
+  scale_x_continuous(breaks = c(1, 2, 3, 4, 5, 6, 7))
+```
+
+### Subset Data & Throw Into Model
+```{r}
+wr_sub <- yr1wr %>%
+  select(-c(season, posteam, player_id))
+```
+
+### Model
+#### Load Libraries
+```{r}
+library(rsample)
+library(caret)
+# library(h2o)
+# 
+# # h2o set-up 
+# h2o.no_progress()  # turn off h2o progress bars
+# h2o.init()         # launch h2o
+```
+
+#### Split Into Train/Test
+```{r}
+# Split into train/test data
+set.seed(5)  
+
+# Convert vars
+wr_sub <- wr_sub %>%
+  mutate(
+    drft_round = as.factor(drft_round),
+    shift_cat = as.factor(shift_cat)
+  )
+
+# Create split using stratified sampling for shift_cat
+split_pt  <- initial_split(wr_sub, prop = 0.7, strata = "shift_cat")
+
+train  <- training(split_pt)
+test   <- testing(split_pt)
+
+# Validate splits are similar between
+table(train$shift_cat) %>% prop.table()
+table(test$shift_cat) %>% prop.table()
+```
+
+#### Load Decision Tree Libraries
+```{r}
+library(rpart)
+library(rpart.plot)
+library(vip)
+library(pdp)
+```
+
+#### Create Model
+```{r}
+wrTree <- rpart(
+  formula = shift_cat ~ .,
+  data = train,
+  method = "class"
+)
+```

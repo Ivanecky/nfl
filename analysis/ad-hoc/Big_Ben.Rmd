@@ -1,0 +1,112 @@
+---
+title: "Big Ben Charts"
+author: "Samuel Ivanecky"
+date: "1/5/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(ggimage)
+library(nflfastR)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(nflplotR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+```
+
+# Get Data
+```{r}
+espn <- nflreadr::load_espn_qbr(league = "nfl", seasons = c(2006:2021), summary_type = "season") %>%
+  mutate(
+    epa_play = epa_total / qb_plays
+  )
+```
+
+# Big Ben Data
+```{r}
+bb <- espn %>%
+  filter(name_short == "B. Roethlisberger" & season_type == "Regular") %>%
+  mutate(
+    epa_play = epa_total / qb_plays
+  )
+
+bb_pbp <- pbp %>%
+  filter(passer_player_name == "B.Roethlisberger")
+```
+
+```{r}
+bb_3rd <- bb_pbp %>%
+  filter(play_type == "pass" & down == 3) %>%
+  mutate(
+    air_diff = air_yards - ydstogo
+  )
+```
+
+# Visuals
+## Plot QBR YOY
+```{r}
+bb %>%
+  ggplot(aes(season, epa_play)) +
+  geom_point() +
+  geom_line() +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football RBs Points by Rush Length",
+    subtitle = "Showing top 3 RBs per team. Short: < 5 yds. Medium: 6-10 yds. Long: > 10 yds. Data through Week 15."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 20, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=10, face = "bold")
+  )
+```
+
+## 3rd Down Air Yards
+```{r}
+bb_3rd %>%
+  ggplot(aes(air_diff)) +
+  geom_histogram() +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2021 Fantasy Football RBs Points by Rush Length",
+    subtitle = "Showing top 3 RBs per team. Short: < 5 yds. Medium: 6-10 yds. Long: > 10 yds. Data through Week 15."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    # legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 20, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=10, face = "bold")
+  ) +
+  facet_wrap(season ~ .)
+```
