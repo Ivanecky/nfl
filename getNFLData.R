@@ -25,12 +25,12 @@ stats <- nflfastR::load_player_stats(seasons = c(1999:2021))
 roster <- nflfastR::fast_scraper_roster(seasons = c(1999:2021))
 
 # Get recent seasons PBP
-ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
-  dplyr::filter(game_type == "REG") %>%
-  dplyr::pull(game_id)
+# ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
+#   dplyr::filter(game_type == "REG") %>%
+#   dplyr::pull(game_id)
 
 # Get play-by-play
-pbp <- nflfastR::build_nflfastR_pbp(ids)
+# pbp <- nflfastR::build_nflfastR_pbp(ids)y
 
 # Load fantasy expectations
 ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2010:2021))
@@ -52,7 +52,7 @@ off <- stats %>%
 
 # Create subset with more recent years
 ff <- off %>%
-  filter(season_type == 'REG' & season >= 2010) %>%
+  filter(season_type == 'REG' & season >= 2000) %>%
   select(player_name, full_name, player_id, position, recent_team, season, week, fantasy_points, fantasy_points_ppr) %>%
   unique()
 
@@ -105,14 +105,13 @@ ff_agg <- ff %>%
     avg_pt_pct_ppr = round(mean(pt_change_pct_ppr, na.rm = T), 2),
     abs_med_pt_pct = round(median(abs(pt_change_pct_ppr), na.rm = T), 2),
     total_pts = sum(fantasy_points_ppr, na.rm = T),
-    bust_games = n_distinct(week[fantasy_points_ppr <= 5]),
-    avg_proj = round(mean(Proj.Pts, na.rm = T), 2),
-    avg_var = round(mean(Var, na.rm = T), 2),
-    med_var = round(median(Var, na.rm = T), 2),
-    wks_ovr = n_distinct(week[Exceeded == "Yes"]),
-    wks_undr = n_distinct(week[Exceeded == "No"])
-  ) %>%
-  filter(!is.na(avg_var))
+    bust_games = n_distinct(week[fantasy_points_ppr <= 5])
+    # avg_proj = round(mean(Proj.Pts, na.rm = T), 2),
+    # avg_var = round(mean(Var, na.rm = T), 2),
+    # med_var = round(median(Var, na.rm = T), 2),
+    # wks_ovr = n_distinct(week[Exceeded == "Yes"]),
+     # wks_undr = n_distinct(week[Exceeded == "No"])
+  )
 
 #####################
 # Clean up data for fantasy expectations

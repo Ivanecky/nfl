@@ -1,0 +1,106 @@
+---
+title: "QB Analysis"
+author: "Samuel Ivanecky"
+date: "3/26/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(ggimage)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+library(nflverse)
+```
+
+# Subset Data
+## Pass Plays
+```{r}
+# Get only pass plays
+pass <- pbp %>%
+  filter(play_type == "pass")
+
+# Get QBs
+qbs <- stats %>%
+  filter(position == "QB")
+```
+
+## Subset 2021
+```{r}
+# Subset 2021 QBs
+qb21 <- qbs %>%
+  filter(season == "2021") %>%
+  group_by(player_id, player_name) %>%
+  summarise(
+    total_attempts = sum(attempts)
+  ) %>%
+  ungroup() %>%
+  filter(total_attempts > 200)
+
+pass %>%
+  filter(season == 2021 & season_type == "REG") %>%
+  filter(passer_id %in% qb21$player_id) %>%
+  ggplot(aes(epa)) +
+  geom_density(aes(color = posteam, fill = posteam), alpha = 0.4) +
+  nflplotR::scale_color_nfl(type = "primary") +
+  nflplotR::scale_fill_nfl(type = "secondary") +
+  ggplot2::labs(
+    x = "",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "",
+    subtitle = ""
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 20, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=15, face = "bold")
+  ) 
+```
+
+## QB Comparison
+### Garropolo v Trubisky
+```{r}
+pass %>%
+  filter(season >= 2019 & season_type == "REG") %>%
+  filter(passer_player_name %in% c("J.Garoppolo", "S.Darnold", "J.Herbert")) %>%
+  ggplot(aes(epa)) +
+  geom_density(aes(color = posteam, fill = posteam)) +
+  nflplotR::scale_fill_nfl(alpha = 0.5, type = "primary") +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  ggplot2::labs(
+    title = "QB EPA/Play - 2019 to Present",
+    subtitle = "",
+    x = "EPA/play",
+    y = ""
+  ) +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+   plot.title = ggplot2::element_text(size = 45, hjust = 0.5, face = "bold"),
+    # plot.title.position = "plot",
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size = 25, face = "bold")
+  ) 
+```

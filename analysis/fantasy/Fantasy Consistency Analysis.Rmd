@@ -27,6 +27,9 @@ library(nflreadr)
 library(nflplotR)
 library(kit)
 
+# Run script for fantasy agg data
+source("/Users/samivanecky/git/nfl/getNFLData.R")
+
 # Load data
 # Load player IDs
 ff_ids <- nflreadr::load_ff_playerids() %>%
@@ -46,7 +49,8 @@ ff_exp <- ff_exp %>%
 
 # Clean up data for fantasy expectations
 ff_exp_agg <- ff_exp %>%
-  group_by(season, posteam, player_id, full_name, position) %>%
+  filter(week <= 18) %>%
+  group_by(season, player_id, full_name, position) %>%
   summarise(
     n_games = n_distinct(week),
     avg_pts = round(mean(total_fantasy_points, na.rm = T), 3),
@@ -73,6 +77,24 @@ ff_exp_agg <- ff_exp %>%
     prev_season_games = lag(n_games)
   )
 
+```
+
+## Get Player Teams
+```{r}
+plyrTeams <- ff %>%
+  group_by(player_id, season) %>%
+  filter(week == max(week, na.rm = T)) %>%
+  select(
+    player_id, recent_team, season
+  ) %>%
+  funique()
+```
+
+## Join Player Teams to Aggregate Data
+```{r}
+ff_agg <- ff_agg %>%
+  left_join(plyrTeams, by = c("player_id", "season")) %>%
+  funique()
 ```
 
 # Analysis
@@ -356,6 +378,13 @@ split_pt  <- initial_split(wr_sub, prop = 0.7, strata = "shift_cat")
 train  <- training(split_pt)
 test   <- testing(split_pt)
 
+# Drop player names
+train <- train %>%
+  select(-c(full_name))
+
+test <- test %>%
+  select(-c(full_name))
+
 # Validate splits are similar between
 table(train$shift_cat) %>% prop.table()
 table(test$shift_cat) %>% prop.table()
@@ -377,3 +406,312 @@ wrTree <- rpart(
   method = "class"
 )
 ```
+
+##### Visualize Tree
+```{r}
+rpart.plot(wrTree, type = 1) +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 35, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=25, face = "bold"),
+  )
+```
+
+##### Plot CP
+```{r}
+plotcp(wrTree) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 35, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=25, face = "bold"),
+  )
+```
+
+##### Feature Importance
+```{r}
+vip(wrTree, geom = "point", aesthetics = list(size = 7)) +
+  ggplot2::labs(
+    x = "Feature",
+    y = "Feature Importance",
+    caption = "Data: @nflfastR",
+    title = "Feature Importance in Base WR Rookie Jump Model",
+    subtitle = ""
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 35, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=25, face = "bold"),
+  )
+```
+
+##### 
+```{r}
+
+```
+
+## WR Analysis of 2021 Shifts
+### Aggregate Data
+```{r}
+wrDf <- ff_exp_agg %>%
+  filter(position == "WR") %>%
+  group_by(player_id, full_name) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    c_avg_pts = cummean(avg_pts),
+    c_avg_pts_diff = cummean(avg_pts_diff),
+    c_avg_pts_shift = cummean(avg_pts_shift)
+  ) %>%
+  filter(!is.na(year_in_league)) %>%
+  mutate(
+    szn_v_c_avg = avg_pts - lag(c_avg_pts)
+  )
+```
+
+#### Join in Player Teams
+```{r}
+wrDf <- wrDf %>%
+  left_join(plyrTeams, by = c("player_id", "season"))
+```
+
+### Plot
+```{r}
+wrDf %>%
+  filter(season == 2021) %>%
+ # filter(abs(szn_v_c_avg) >= 3) %>%
+  ggplot(aes(avg_pts, szn_v_c_avg, color = posteam)) +
+  geom_point(aes(size = 5)) +
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 4, colour = "black", fill = "white", max.overlaps = 7) +
+  nflplotR::scale_color_nfl(type = "primary") +
+  # nflplotR::scale_fill_nfl(type = "primary")
+  ggplot2::labs(
+    x = "Avg. PPR Points",
+    y = "Season Avg vs Career Avg (PPR Points)",
+    caption = "Data: @nflfastR",
+    title = "WR 2021 Fantasy Averages vs Career",
+    subtitle = "Career averages are up to but not including the 2021 season. Positive values indicate current season was better than career average."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 30, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=15, face = "bold"),
+  )
+```
+
+## RB Analysis of 2021 Shifts
+### Aggregate Data
+```{r}
+rbDf <- ff_exp_agg %>%
+  filter(position == "RB") %>%
+  group_by(player_id, full_name) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    c_avg_pts = cummean(avg_pts),
+    c_avg_pts_diff = cummean(avg_pts_diff),
+    c_avg_pts_shift = cummean(avg_pts_shift)
+  ) %>%
+  filter(!is.na(year_in_league)) %>%
+  mutate(
+    szn_v_c_avg = avg_pts - lag(c_avg_pts)
+  )
+```
+
+#### Join in Player Teams
+```{r}
+rbDf <- rbDf %>%
+  left_join(plyrTeams, by = c("player_id", "season"))
+```
+
+### Plot
+```{r}
+rbDf %>%
+  filter(season == 2021 & n_games >= 8) %>%
+  # filter(abs(szn_v_c_avg) >= 3) %>%
+  ggplot(aes(avg_pts, szn_v_c_avg, color = posteam)) +
+  geom_point(aes(size = 5)) +
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 4, colour = "black", fill = "white", max.overlaps = 7) +
+  nflplotR::scale_color_nfl(type = "primary") +
+  # nflplotR::scale_fill_nfl(type = "primary")
+  ggplot2::labs(
+    x = "Avg. PPR Points",
+    y = "Season Avg vs Career Avg (PPR Points)",
+    caption = "Data: @nflfastR & ff_opportunity",
+    title = "RB 2021 Fantasy Averages vs Career",
+    subtitle = "Career averages not including the 2021 season. Positive values indicate current season better than career avg. Min. 8 games."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 30, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=15, face = "bold"),
+  )
+```
+
+### YOY Trend
+```{r}
+rb21 <- rbDf %>%
+  filter(season == 2021 & n_games >= 8 & szn_v_c_avg <= -3)
+
+rbDf %>%
+  filter(player_id %in% rb21$player_id) %>%
+  filter(season >= 2017) %>%
+  # filter(abs(szn_v_c_avg) >= 3) %>%
+  ggplot(aes(season, szn_v_c_avg, color = posteam, group = player_id)) +
+  geom_point() +
+  geom_line() +
+  # geom_hline(yintercept = 0, linetype = "dashed") + 
+  # geom_label_repel(aes(label = full_name), nudge_y = -0.1, size = 4, colour = "black", fill = "white", max.overlaps = 7) +
+  nflplotR::scale_color_nfl(type = "primary") +
+  # nflplotR::scale_fill_nfl(type = "primary")
+  ggplot2::labs(
+    x = "Avg. PPR Points",
+    y = "Season Avg vs Career Avg (PPR Points)",
+    caption = "Data: @nflfastR & ff_opportunity",
+    title = "RB 2021 Fantasy Averages vs Career",
+    subtitle = "Career averages not including the 2021 season. Positive values indicate current season better than career avg. Min. 8 games."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 30, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=15, face = "bold"),
+  )
+```
+
+# 2021 Players
+## Subset Data
+```{r}
+# Get players from 2021 minimum 3 games
+ff21_plyrs <- ff_agg %>%
+  filter(season == 2021 & n_games >= 3)
+
+ff21 <- ff_agg %>%
+  filter(player_id %in% ff21_plyrs$player_id) %>%
+  filter(n_games >= 5)
+
+# Subset WRs
+wr21 <- ff21 %>%
+  filter(position == "WR")
+
+# Subset RBs
+rb21 <- ff21 %>%
+  filter(position == "RB")
+```
+
+## New Metrics
+```{r}
+# Create a season change metric for average points
+wr21 <- wr21 %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    szn_avg_change = avg_pts_ppr - lag(avg_pts_ppr)
+  ) %>%
+  mutate(
+    szn_avg_change_pct = round((szn_avg_change / avg_pts_ppr) * 100, 3)
+  ) %>%
+  ungroup()
+```
+
+## WR Breakout Subset
+```{r}
+# Looking at WR who increased production by minimum 30%
+brkoutWr <- wr21 %>%
+  filter(szn_avg_change_pct >= 25 & avg_pts_ppr >= 10 & n_games >= 10)
+
+# Subset data to these receivers
+brkOutDf <- wr21 %>%
+  filter(player_id %in% brkoutWr$player_id) %>%
+  mutate(
+    is_brkout_szn = case_when(
+      szn_avg_change_pct >= 25 & avg_pts_ppr >= 10 & n_games >= 10 ~ 'Y',
+      T ~ 'N'
+    )
+  ) %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    is_post_brkout = case_when(
+      lag(is_brkout_szn) == 'Y' ~ 'Y',
+      T ~ 'N'
+    )
+  )
+
+# Look at average change 
+brkOutDf %>%
+  filter(is_post_brkout == "Y") %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change), szn_avg_change)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "Fantasy Breakout Season Continued Success - Wide Receivers",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 30% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+
+# Look at average change 
+brkOutDf %>%
+  filter(is_post_brkout == "Y") %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change_pct), szn_avg_change_pct)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "Fantasy Breakout Season Continued Success - Wide Receivers",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 30% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+```
+
+
