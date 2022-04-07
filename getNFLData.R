@@ -25,12 +25,12 @@ stats <- nflfastR::load_player_stats(seasons = c(1999:2021))
 roster <- nflfastR::fast_scraper_roster(seasons = c(1999:2021))
 
 # Get recent seasons PBP
-# ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
-#   dplyr::filter(game_type == "REG") %>%
-#   dplyr::pull(game_id)
+ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
+  dplyr::filter(game_type == "REG") %>%
+  dplyr::pull(game_id)
 
 # Get play-by-play
-# pbp <- nflfastR::build_nflfastR_pbp(ids)y
+# pbp <- nflfastR::build_nflfastR_pbp(ids)
 
 # Load fantasy expectations
 ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2010:2021))
