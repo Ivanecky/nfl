@@ -30,7 +30,7 @@ ids <- nflfastR::fast_scraper_schedules(seasons = c(2000:2021)) %>%
   dplyr::pull(game_id)
 
 # Get play-by-play
-# pbp <- nflfastR::build_nflfastR_pbp(ids)
+pbp <- nflfastR::build_nflfastR_pbp(ids)
 
 # Load fantasy expectations
 ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2010:2021))
@@ -45,6 +45,18 @@ stats <- stats %>%
   left_join(roster_sub, by = c("player_id" = "gsis_id")) %>%
   funique()
 
+# Create season aggregated data
+season_stats <- stats %>%
+  group_by(
+    player_id, season, season_type
+  ) %>%
+  summarise(
+    n_games = n_distinct(week),
+    across(where(is.numeric), ~ sum(.x, na.rm = TRUE))
+  ) %>%
+  ungroup() %>%
+  select(-c(week))
+
 # Aggregate Fantasy Data
 # Keep only offensive positions relevant to fantasy
 off <- stats %>%
@@ -54,29 +66,8 @@ off <- stats %>%
 ff <- off %>%
   filter(season_type == 'REG' & season >= 2000) %>%
   select(player_name, full_name, player_id, position, recent_team, season, week, fantasy_points, fantasy_points_ppr) %>%
-  unique()
-
-# Modify some names
-# plyrDf <- plyrDf %>%
-#   mutate(
-#     Name = case_when(
-#       Name == "AJ Dillon" ~ "A.J. Dillon",
-#       Name == "D.J. Moore" ~ "DJ Moore",
-#       Name == "D.K. Metcalf" ~ "DK Metcalf",
-#       Name == "Amon-Ra. St." ~ "Amon-Ra. St. Brown",
-#       Name == "Equanimeous St." ~ "Equanimeous St. Brown",
-#       Name == "Cedrick Wilson" ~ "Ced Wilson",
-#       Name == "Joshua Palmer" ~ "Josh Palmer",
-#       T ~ Name
-#     )
-#   )
-
-# Join expectation data
-# ff <- ff %>%
-#   left_join(plyrDf, by = c("full_name" = "Name", "week" = "Week"))
-
-ff <- ff %>%
-  group_by(player_id, player_name, position, season) %>%
+  unique() %>%
+  group_by(player_id, position, season) %>%
   mutate(
     pt_change = fantasy_points - lag(fantasy_points, order_by = week),
     pt_change_ppr = fantasy_points_ppr - lag(fantasy_points_ppr, order_by = week)
@@ -85,11 +76,10 @@ ff <- ff %>%
     pt_change_pct = round(((fantasy_points - lag(fantasy_points)) / lag(fantasy_points)) * 100, 2),
     pt_change_pct_ppr = round(((fantasy_points_ppr - lag(fantasy_points_ppr)) / lag(fantasy_points_ppr)) * 100, 2),
   ) %>%
-  ungroup() # %>%
-# filter(!is.na(pt_change_pct) & !is.nan(pt_change_pct_ppr) & !is.infinite(pt_change_pct) & !is.infinite(pt_change_pct_ppr))
+  ungroup()
 
 ff_agg <- ff %>%
-  group_by(player_id, player_name, full_name, position, season) %>%
+  group_by(player_id, position, season) %>%
   summarise(
     n_games = n(),
     avg_pts = round(mean(fantasy_points), 2),

@@ -1,0 +1,504 @@
+---
+title: "WR Breakout Seasons"
+author: "Samuel Ivanecky"
+date: "4/8/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=14, fig.height=8) 
+
+library(tidymodels)
+library(httr)
+library(dplyr)
+library(ggrepel)
+library(gganimate)
+library(plotly)
+library(ggthemes)
+library(ggpubr)
+library(ggimage)
+library(reshape2)
+library(nflfastR)
+library(directlabels)
+library(nflreadr)
+library(nflplotR)
+library(kit)
+library(cluster)  
+library(factoextra)
+library(gt)
+library(reactable)
+library(htmltools)
+
+# Run script for fantasy agg data
+source("/Users/z0041ss/Personal Projects/nfl/getNFLData.R")
+
+# Load data
+# Load player IDs
+ff_ids <- nflreadr::load_ff_playerids() %>%
+  select(
+    gsis_id, draft_year, draft_round, draft_pick, college
+  ) %>%
+  filter(!is.na(gsis_id)) %>%
+  funique()
+
+# Load fantasy expectations
+ff_exp <- nflreadr::load_ff_opportunity(seasons = c(2006:2021))
+
+# Join draft data to fantasy data
+ff_exp <- ff_exp %>%
+  left_join(ff_ids, by = c("player_id" = "gsis_id")) %>%
+  funique()
+
+# Clean up data for fantasy expectations
+ff_exp_agg <- ff_exp %>%
+  filter(week <= 18) %>%
+  group_by(season, player_id, full_name, position) %>%
+  summarise(
+    n_games = n_distinct(week),
+    avg_pts = round(mean(total_fantasy_points, na.rm = T), 3),
+    avg_pts_diff = round(mean(total_fantasy_points_diff, na.rm = T), 3),
+    avg_pts_exp = round(mean(total_fantasy_points_exp, na.rm = T), 3),
+    sd_pts = round(sd(total_fantasy_points, na.rm = T), 3),
+    sd_pts_diff = round(sd(total_fantasy_points_diff, na.rm = T), 3),
+    sd_pts_exp = round(sd(total_fantasy_points_exp, na.rm = T), 3),
+    drft_yr = first(draft_year),
+    drft_round = first(draft_round),
+    drft_pick = first(draft_pick)
+  ) %>%
+  ungroup() %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = T) %>%
+  mutate(
+    year_in_league = as.numeric(season) - as.numeric(drft_yr) + 1,
+    avg_pts_shift = avg_pts - lag(avg_pts),
+    avg_pts_diff_shift = avg_pts_diff - lag(avg_pts_diff),
+    avg_pts_exp_shift = avg_pts_exp - lag(avg_pts_exp),
+    sd_pts_shift = sd_pts - lag(sd_pts),
+    sd_pts_diff_shift = sd_pts_diff - lag(sd_pts_diff),
+    sd_pts_exp_shift = sd_pts_exp - lag(sd_pts_exp),
+    prev_season_games = lag(n_games)
+  )
+
+```
+
+## Get Player Teams
+```{r}
+plyrTeams <- ff %>%
+  group_by(player_id, season) %>%
+  filter(week == max(week, na.rm = T)) %>%
+  select(
+    player_id, recent_team, season
+  ) %>%
+  funique()
+```
+
+## Subset Player Names
+```{r}
+plyrNames <- ff %>%
+  select(
+    player_id, season, full_name
+  ) %>%
+  group_by(
+    player_id, season
+  ) %>%
+  summarise(
+    full_name = first(full_name)
+  ) %>%
+  ungroup() %>%
+  funique()
+```
+
+## Join Player Teams to Aggregate Data
+```{r}
+ff_agg <- ff_agg %>%
+  left_join(plyrTeams, by = c("player_id", "season")) %>%
+  funique()
+```
+
+# 2021 Wide Receivers
+## Subset Data
+```{r}
+# Get players from 2021 minimum 3 games
+ff21_plyrs <- ff_agg %>%
+  filter(season == 2021 & n_games >= 3)
+
+# Subset seasons for players from 2021 season w at least 5 games
+ff21 <- ff_agg %>%
+  filter(player_id %in% ff21_plyrs$player_id) %>%
+  filter(n_games >= 5)
+
+# Subset WRs
+wr21 <- ff21 %>%
+  filter(position == "WR")
+
+# Subset RBs
+rb21 <- ff21 %>%
+  filter(position == "RB")
+```
+
+## New Metrics
+### Subset 2021 WRs
+```{r}
+# Create a season change metric for average points
+wr21 <- wr21 %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    szn_avg_change = avg_pts_ppr - lag(avg_pts_ppr)
+  ) %>%
+  mutate(
+    szn_avg_change_pct = round((szn_avg_change / avg_pts_ppr) * 100, 3)
+  ) %>%
+  ungroup()
+```
+
+## WR Breakout Subset Visuals
+```{r}
+# Looking at WR who increased production by minimum 30%
+brkoutWr <- wr21 %>%
+  filter(szn_avg_change_pct >= 25 & avg_pts_ppr >= 9 & n_games >= 10)
+
+# Subset data to these receivers
+brkOutDf <- wr21 %>%
+  filter(player_id %in% brkoutWr$player_id) %>%
+  mutate(
+    is_brkout_szn = case_when(
+      szn_avg_change_pct >= 25 & avg_pts_ppr >= 10 & n_games >= 10 ~ 'Y',
+      T ~ 'N'
+    )
+  ) %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    is_post_brkout = case_when(
+      lag(is_brkout_szn) == 'Y' ~ 'Y',
+      T ~ 'N'
+    )
+  )
+
+# Look at average change 
+brkOutDf %>%
+  filter(is_post_brkout == "Y") %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change), szn_avg_change)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "Fantasy Breakout Season Continued Success - Wide Receivers",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 25% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+
+# Look at average change 
+brkOutDf %>%
+  filter(is_post_brkout == "Y") %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change_pct), szn_avg_change_pct)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "Fantasy Breakout Season Continued Success - Wide Receivers",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 25% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+
+# Look at average change 
+brkOutDf %>%
+  filter(is_post_brkout == "Y" & season == 2021) %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change), szn_avg_change)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2020 Breakout WRs in 2021",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 25% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+
+brkOutDf %>%
+  filter(is_post_brkout == "Y" & season == 2021) %>%
+  mutate(
+    plyr_name_grp = paste0(player_name, " - ", season)
+  ) %>%
+  ggplot(aes(reorder(plyr_name_grp, szn_avg_change_pct), szn_avg_change_pct)) +
+  geom_col(aes(color = recent_team, fill = recent_team)) +
+  nflplotR::scale_color_nfl(type = "secondary") +
+  nflplotR::scale_fill_nfl(type = "primary") +
+  ggplot2::labs(
+    x = "Shift in Avg. PPR Points vs Breakout Season",
+    y = "",
+    caption = "Data: @nflfastR",
+    title = "2020 Breakout WRs in 2021",
+    subtitle = "Showing shift in season average PPR points for the season following a breakout year. Breakout year identified by >= 25% improvement from previous season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) +
+  coord_flip()
+```
+
+### Table Values
+#### Create Metric
+```{r}
+postBrkOutSzns <- brkOutDf %>%
+  filter(is_post_brkout == "Y") %>%
+  mutate(
+    pct_change_cat = case_when(
+      szn_avg_change_pct >= 10 ~ "Improved",
+      szn_avg_change_pct < 10 & szn_avg_change_pct >= -5 ~ "Maintained",
+      szn_avg_change_pct < -5 & szn_avg_change_pct >= -15 ~ "Moderate Regression",
+      T ~ "Major Regression"
+    )
+  )
+```
+
+#### Plot Data
+```{r}
+postBrkOutSzns %>%
+  ggplot(aes(pct_change_cat, fill = pct_change_cat)) +
+  geom_bar(stat = "count") +
+  ggplot2::labs(
+    x = "Performance Category Following Breakout Season",
+    y = "Number of Receivers",
+    caption = "Data: @nflfastR. Data for WRs active in 2021.",
+    title = "Fantasy Breakout Season Continued Success - Wide Receivers",
+    subtitle = "Showing player breakout by performance in PPR season average following breakout season."
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    aspect.ratio = 9 / 16,
+    legend.position = "none",
+    axis.text.y = element_text(face = "italic"),
+    plot.title = ggplot2::element_text(size = 45, hjust = 0.5, vjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(face = "italic"),
+    text = element_text(size=20, face = "bold")
+  ) 
+```
+
+#### Players Who Maintained/Improved
+```{r}
+# Subset players
+mainImp <- postBrkOutSzns %>%
+  filter(
+    pct_change_cat %in% c("Maintained", "Improved")
+  )
+```
+
+### Who Broke Out in 2021?
+#### Data
+```{r}
+# View table
+brkOutDf %>%
+  filter(season == 2021 & is_brkout_szn == "Y") %>%
+  select(
+    full_name, n_games, avg_pts_ppr, szn_avg_change
+  ) %>%
+  rename(
+    Name = full_name,
+    `Games Played` = n_games,
+    `Avg. Points PPR` = avg_pts_ppr,
+    `Season Avg. Improvement vs Last Year` = szn_avg_change
+  ) %>%
+  ungroup() %>%
+  select(-c(player_id)) %>%
+  reactable()
+```
+
+### Examine Previous Breakout WRs
+#### Define Pre-Breakout Szn
+```{r}
+brkOutDf <- brkOutDf %>%
+  group_by(player_id) %>%
+  arrange(season, .by_group = TRUE) %>%
+  mutate(
+    is_pre_brkout_szn = case_when(
+      lead(is_brkout_szn) == "Y" ~ "Y",
+      T ~ "N"
+    )
+  ) %>%
+  ungroup()
+```
+
+#### Subset Pre-Breakout Szns
+```{r}
+# Subset season stats for WRs
+wr_stats <- season_stats %>%
+  filter(season_type == "REG") %>%
+  select(
+    player_id, season, carries, rushing_yards, rushing_tds, rushing_epa, receptions, targets, receiving_yards, receiving_tds,
+    receiving_air_yards, receiving_yards_after_catch, receiving_epa, target_share, air_yards_share
+  )
+
+# Subset and join stats from that season
+preBrk <- brkOutDf %>%
+  filter(is_pre_brkout_szn == "Y") %>%
+  left_join(wr_stats, by = c("player_id", "season")) %>%
+  mutate(
+    target_share = round((target_share / n_games) * 100, 4),
+    air_yards_share = round((air_yards_share / n_games) * 100, 4)
+  )
+```
+
+#### Clustering Analysis
+##### Check for NA Data
+```{r}
+# Check numeric columns for NA values
+preBrk %>%
+  summarise(
+    across(where(is.numeric), ~ sum(is.na(.x)))
+  ) 
+```
+
+##### Subset Data for Clustering
+```{r}
+preBrk <- preBrk %>%
+  mutate(
+    lbl = paste0(full_name, "-", season)
+  ) %>%
+  select(-c(player_name, position, season, szn_avg_change, szn_avg_change_pct, is_brkout_szn, is_post_brkout, 
+            is_pre_brkout_szn, avg_pt_pct, avg_pt_pct_ppr, player_id, full_name))
+
+# Set row names
+rownames(preBrk) <- preBrk$lbl
+```
+
+##### Normalize Data
+```{r}
+# Scale data
+preBrk <- preBrk %>%
+  mutate_if(is.numeric, scale)
+
+# Reformat row names
+preBrk <- preBrk %>%
+  remove_rownames() %>%
+  column_to_rownames(var = "lbl")
+```
+
+##### Check Distance
+```{r}
+distance <- get_dist(preBrk)
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+```
+
+##### K Means
+```{r}
+temp <- preBrk %>%
+  select(-c(recent_team))
+
+k3 <- kmeans(temp, centers = 5, nstart = 25)
+str(k3)
+
+fviz_cluster(k3, data = temp)
+```
+
+### Predict Breakout Szn
+#### Combine Data
+```{r}
+# Subset and join stats from that season
+wr <- brkOutDf %>%
+  left_join(wr_stats, by = c("player_id", "season")) %>%
+  filter(season > 2008) %>%
+  mutate(
+    target_share = round((target_share / n_games) * 100, 4),
+    air_yards_share = round((air_yards_share / n_games) * 100, 4)
+  ) %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate(
+    lbl = paste0(full_name, "-", season, "-", recent_team)
+  ) %>%
+  funique() %>%
+  remove_rownames() %>%
+  column_to_rownames(var = "lbl")
+```
+
+## WR Clustering
+### Subset Data
+```{r}
+# Subset and join stats from that season
+wr <- wr %>%
+  left_join(wr_stats, by = c("player_id", "season", "recent_team")) %>%
+  filter(season > 2005) %>%
+  mutate(
+    target_share = round((target_share / n_games) * 100, 4),
+    air_yards_share = round((air_yards_share / n_games) * 100, 4)
+  ) %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate(
+    lbl = paste0(full_name, "-", season, "-", recent_team)
+  ) %>%
+  filter(full_name != "Cordarrelle Patterson") %>%
+  select(-c(player_name, position, season, avg_pt_pct, avg_pt_pct_ppr, player_id, full_name)) %>%
+  distinct(lbl, .keep_all = TRUE) 
+ 
+# Scale data
+wr <- wr %>%
+  mutate_if(is.numeric, scale)
+
+# Reformat row names
+wr <- wr %>%
+  remove_rownames() %>%
+  column_to_rownames(var = "lbl")
+```
+
+#### Cluster
+```{r}
+temp <- wr %>%
+  select(-c(recent_team, abs_med_pt_pct))
+
+k3 <- kmeans(temp, centers = 10, nstart = 25)
+str(k3)
+
+fviz_cluster(k3, data = temp)
+```
+
